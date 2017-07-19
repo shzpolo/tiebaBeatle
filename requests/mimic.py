@@ -5,34 +5,33 @@ import time
 import os
 
 
-url = 'https://m.weibo.com/'
+url = 'https://weibo.cn/'
 cookie_save_add = r'C:\Users\Polo\PycharmProjects\test\ml_res\cookie_save'
 cookie_time_add = r'C:\Users\Polo\PycharmProjects\test\ml_res\cookie_time'
 time_list_save_add = r'C:\Users\Polo\PycharmProjects\test\ml_res\time_list'
 driver = webdriver.PhantomJS(r'C:\tieba\phantomjs-2.1.1-windows\bin\phantomjs.exe')
 
-search_t = '去睡觉'
-searching_pages = 300
-
 
 def start_driver(url):
+    print('Going into main page ...')
     driver.get(url)
-    print('go into main page')
-    login = driver.find_element_by_class_name('action').find_elements_by_tag_name('a')[1]
+    time.sleep(10)
+
+    login = driver.find_element_by_link_text('登录')
     login.click()
     time.sleep(10)
 
 
 def login_get_cookie():
-    print('logging')
+    print('logging .....')
+
     name = driver.find_element_by_id('loginName')
     passwd = driver.find_element_by_id('loginPassword')
     name.clear()
     name.send_keys('shuhuanze@126.com')
     passwd.clear()
     passwd.send_keys('shz88265996')
-    icon = driver.find_element_by_id('loginAction')
-    icon.click()
+    driver.find_element_by_id('loginAction').click()
     cookies = driver.get_cookies()
     #print(cookies)
     cookie = ''
@@ -47,7 +46,7 @@ def login_get_cookie():
 def save_file(file_add,file):  # save files
     try:
         print('Saving file...')
-        f= open(file_add,'w')
+        f= open(file_add,'ab')
         f.write(file)
         if file_add is r'C:\Users\Polo\PycharmProjects\test\ml_res\cookie_time':
             f.write('\n')
@@ -67,8 +66,9 @@ def push_search_button():
 
 
 def search(search_txt):
-    print('searching')
-    search_bar = driver.find_element_by_name('queryVal')
+    print('Searching ' + search_txt + '....')
+    print(driver.page_source)
+    search_bar = driver.find_element_by_name('keyword')
     search_bar.clear()
     search_bar.send_keys(search_txt)
     search_bar.send_keys(Keys.RETURN)
@@ -81,19 +81,21 @@ def scroll_down(times):
         driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")  # 执行JavaScript实现网页下拉倒底部
         print(str(i + 1) + "th scroll down is complete.")
         print(str(i + 1) + "th waiting page response.")
-        time.sleep(3)  # 等待x秒（时间可以根据自己的网速而定），页面加载出来再执行下拉操作
+        time.sleep(4)  # 等待x秒（时间可以根据自己的网速而定），页面加载出来再执行下拉操作
 
 
-def get_time_list():
-    all_time = BeautifulSoup(driver.page_source, 'html.parser').find_all('span', class_='time')
+def get_time_list(page):
     time_list = []
-    for s_time in all_time:
-        first_pos = s_time.text.find(r' ') + 1
-        second_pos = len(s_time.text) - 1
-        if first_pos is not -1:
-            sleep_time = s_time.text[first_pos : second_pos]
-            time_list.append(sleep_time)
-            print(sleep_time)
+    for i in range(page):
+        print('This is the ' + i +'th page.')
+        all_time = BeautifulSoup(driver.page_source, 'html.parser').find_all('span', class_='ct')
+        for s_time in all_time:
+            if s_time.text.find('前') is not -1:
+                continue
+            colon = s_time.text.find(':')
+            time_list.append(s_time.text[colon - 2: colon + 3])
+            print(s_time.text[colon - 2: colon + 3])
+        push_next_button()
     return time_list
 
 
@@ -135,7 +137,11 @@ def is_valid_cookie(cookie_time_add):#判断cookie是否有效
         except Exception as e:
             print(e)
 
-
+def push_next_button():
+    print('pushing next button....')
+    next_page = driver.find_element_by_id('pagelist').find_element_by_tag_name('a')
+    next_page.click()
+    time.sleep(10)
 '''
 result = is_valid_cookie(cookie_time_add)
 if result is False:
@@ -150,8 +156,16 @@ else:
 
 start_driver(url)
 login_get_cookie()
-push_search_button()
-search(search_t)
-scroll_down(300)
-time_list = str(get_time_list())
+search('good night')
+time_list = str(get_time_list(99))
+save_file(time_list_save_add, time_list)
+
+driver.get(url)
+search('去睡了')
+time_list = str(get_time_list(99))
+save_file(time_list_save_add, time_list)
+
+driver.get(url)
+search('晚安')
+time_list = str(get_time_list(99))
 save_file(time_list_save_add, time_list)
