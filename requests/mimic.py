@@ -46,7 +46,7 @@ def login_get_cookie():
 def save_file(file_add,file):  # save files
     try:
         print('Saving file...')
-        f= open(file_add,'ab')
+        f= open(file_add,'a')
         f.write(file)
         if file_add is r'C:\Users\Polo\PycharmProjects\test\ml_res\cookie_time':
             f.write('\n')
@@ -87,7 +87,7 @@ def scroll_down(times):
 def get_time_list(page):
     time_list = []
     for i in range(page):
-        print('This is the ' + i +'th page.')
+        print('This is the ' + str(i) +'th page.')
         all_time = BeautifulSoup(driver.page_source, 'html.parser').find_all('span', class_='ct')
         for s_time in all_time:
             if s_time.text.find('前') is not -1:
