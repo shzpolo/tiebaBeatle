@@ -10,7 +10,7 @@ tieba_names = []
 print(str(12*30*19))
 
 for name in names:
-    for i in range(30):
+    for i in range(2):
         url = url_pre + name + url_bac + str(i)
         res = requests.get(url, headers = header)
         soup = BeautifulSoup(res.text, 'html.parser')

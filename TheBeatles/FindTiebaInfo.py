@@ -1,30 +1,36 @@
-from queue import Queue
 import requests
-from bs4 import BeautifulSoup
 import threading
 import time
 import pymysql
+from queue import Queue
+from bs4 import BeautifulSoup
+from requests.exceptions import ConnectTimeout
 from pymysql.err import IntegrityError
-from TheBeatles.parameter import host, user, passwd, db, tieba_names, firefox_title
+from TheBeatles.parameter import host, user, passwd, db, name_queue
 
-thread_limit = 4
+name_list = name_queue
+mutex = threading.Lock()
 
 class TiebaInfoBeatle():
 
     def __init__(self, name, num):
-        self.com_header = {'User-Agent': firefox_title}
+        self.com_header = {'dummy': 'foo'}
         self.folder_path=r'C:\tieba\info'
         self.tieba_url = 'https://tieba.baidu.com'
         self.tieba_name = name
         self.thread_num = num
 
-    def request(self, url, header):
+    def request(self, url, payload):
         try:
-            res = requests.get(url, header)
+            res = requests.get(url, params=payload, timeout=5)
+            res.raise_for_status()
             return res
-        except Exception as e:
+        except ConnectTimeout as ce:
             print('Can not get response!')
-            print(e)
+            print(ce)
+            return None
+        except requests.exceptions.RequestException as re:
+            print(re)
             return None
 
     def infoFind(self, a):
@@ -97,11 +103,9 @@ class TiebaInfoBeatle():
 
     def calc_page(self):
         try:
-            tieba_header = {
-                'User-Agent': firefox_title,
-                'kw': self.tieba_name, 'ie': 'utf-8', 'pn': str(0)}
+            tieba_payload = {'kw': self.tieba_name, 'ie': 'utf-8', 'pn': str(0)}
             bar_url = self.tieba_url + '/f'
-            res = self.request(bar_url, tieba_header)
+            res = self.request(bar_url, tieba_payload)
             soup = BeautifulSoup(res.text, 'html.parser')
             if soup.find('h2', class_='icon-attention'):
                 return 0
@@ -112,7 +116,7 @@ class TiebaInfoBeatle():
             mains = titles.text
         except:
             print('Page get error!')
-            return 2
+            return 10
         print('Calculating...')
         try:
             mains = float(mains)
@@ -128,29 +132,51 @@ class TiebaInfoBeatle():
         print('Internet state is awful! Suggest wait a moment.')
         print('System automatically change state to stop, if you want to continue, please'
               ' open it again.')
-        cursor.execute("update state set val = 1 where id = 0;")
+        cursor.execute("update state set amount = 1 where id = 0;")
         conn.commit()
 
-    def get_title(self):
+    def if_user_name_duplicate(self, a, cursor, conn):
+        ap = a.parent
+        userA = None
+        if ap is not None:
+            user_line = ap.next_sibling
+            if user_line is not None:
+                span1 = user_line.find('span')
+                if span1 is not None:
+                    span2 = span1.find('span')
+                    if span2 is not None:
+                        userA = span2.find('a')
+        if userA is None:
+            print('This user cannot access. Going to next one.')
+            return True
+        name = userA.text
+        cursor.execute("select id from tieba_db where user_name='{user_name}'".format(user_name=name))
+        conn.commit()
+        user_id = cursor.fetchone()
+        if user_id is None:
+            return False
+        else:
+            print('This user is duplicated. Going to next one.')
+            return True
+
+    def get_title(self, controller):
 
         print('Getting connection with database.....')
         conn = pymysql.connect(host=host, user=user, password=passwd, db=db, charset='UTF8')
         cursor = conn.cursor()
 
         print('Requesting tieba of ' + self.tieba_name)
-        cursor.execute("update state set name = '{tieba}' where id = {num};".format(tieba=self.tieba_name, num=self.thread_num + 2))
+        cursor.execute("update state set name = '{tieba}' where id = {num};".format(tieba=self.tieba_name, num=self.thread_num + 3))
         conn.commit()
         total = 0
         sex_list = []
         info_list = []
-        calculated_page = self.calc_page()
+        calculated_page = min(self.calc_page(), 1000)
 
         for page in range(calculated_page):
-            tieba_header = {
-                'User-Agent': firefox_title,
-                'kw': self.tieba_name, 'ie': 'utf-8', 'pn': str(page * 50)}
+            tieba_payload = {'kw': self.tieba_name, 'ie': 'utf-8', 'pn': str(page*50)}
             bar_url = self.tieba_url + '/f'
-            res = self.request(bar_url, tieba_header)
+            res = self.request(bar_url, tieba_payload)
             if res is None:
                 continue
             soup = BeautifulSoup(res.text, 'html.parser')
@@ -160,23 +186,24 @@ class TiebaInfoBeatle():
 
             total += len(all_a)
             for a in all_a:
-                if s.stop is True:
-                    while s.stop:
+                if controller.is_stop():
+                    while controller.is_stop():
                         print('Thread engaging information of tieba of ' + self.tieba_name + ' is pausing.....')
                         time.sleep(5)
+                elif a is None or self.if_user_name_duplicate(a, cursor, conn):
+                    continue
                 else:
+
                     internet_pointer = threading.Timer(20, self.set_exit, (conn, cursor))
                     internet_pointer.start()
                     span = self.infoFind(a)
-
-                    if a is None:
-                        continue
+                    internet_pointer.cancel()
 
                     ag = self.ageFind(span)
                     po = self.postFind(span)
                     na = self.nameFind(span)
 
-                    internet_pointer.cancel()
+
                     if ag and po and na is not None:
                         info_set = []
                         info_set.append(ag)
@@ -184,28 +211,35 @@ class TiebaInfoBeatle():
                         info_list.append(info_set)
                         se = self.sexFind(span)
                         sex_list.append(se)
+                        mutex.acquire()
+                        cursor.execute("select val from state where id = 1")
+                        now_id = cursor.fetchone()[0] + 1
+                        mutex.release()
                         try:
-                            cursor.execute("INSERT into test_hz.tieba_db (user_name, title, age, amount, sex) values ('{sql_user_name}', '{sql_title}', {sql_age}, {sql_amount}, '{sql_sex}');".format(sql_user_name=na, sql_title=a['title'], sql_age=ag,sql_amount=po, sql_sex=se))
+                            cursor.execute("INSERT into test_hz.tieba_db (user_name, title, age, amount, sex, id) values ('{sql_user_name}', '{sql_title}', {sql_age}, {sql_amount}, '{sql_sex}', {sql_id});"
+                                           .format(sql_user_name=na, sql_title=a['title'], sql_age=ag,sql_amount=po, sql_sex=se, sql_id=now_id))
+                            cursor.execute("update state set val = {new} where id = 1".format(new=now_id))
                             conn.commit()
                         except IntegrityError as ie:
                             print('This user is duplicated, this information will not save again!')
                             conn.commit()
                             continue
                         except Exception as e:
+                            mutex.acquire()
                             print(
                                 'There are some invalid character in the name or title. anonymous and no_title will added as name and title!')
-                            cursor.execute("select val from state where id = 1")
+                            print(e)
+                            cursor.execute("select amount from state where id = 1")
                             anonymous_num = cursor.fetchone()[0] + 1
                             cursor.execute(
-                                "INSERT into test_hz.tieba_db (user_name, title, age, amount, sex) values ('{sql_user_name}', '{sql_title}', {sql_age}, {sql_amount}, '{sql_sex}');".format(
+                                "INSERT into test_hz.tieba_db (user_name, title, age, amount, sex, id) values ('{sql_user_name}', '{sql_title}', {sql_age}, {sql_amount}, '{sql_sex}', {sql_id});".format(
                                     sql_user_name='Anonymous' + str(anonymous_num), sql_title='no_title', sql_age=ag, sql_amount=po,
-                                    sql_sex=se))
-                            cursor.execute("update state set val = {new} where name = 'An_id'".format(new=anonymous_num))
+                                    sql_sex=se, sql_id = now_id))
+                            cursor.execute("update state set amount = {new} where id = 1".format(new=anonymous_num))
+                            cursor.execute("update state set val = {new} where id = 1".format(new=now_id))
                             conn.commit()
+                            mutex.release()
                             continue
-                        #finally:
-                            #cursor.close()
-                            #conn.close()
 
                     print(a['title'])
 
@@ -216,75 +250,28 @@ class TiebaInfoBeatle():
 
 class ThreadCrawl(threading.Thread):
 
-    def __init__(self, num):
+    def __init__(self, num, controller):
         threading.Thread.__init__(self)
         self.id = num
+        self.controller = controller
 
     def run(self):
+        global name_list, mutex
         while True:
-            if name_queue is None or name_queue.empty() is True:
+            if name_list is None or name_list.empty() is True:
                 break
-            exe = TiebaInfoBeatle(name_queue.get(), self.id)
+            mutex.acquire()
+            exe = TiebaInfoBeatle(name_list.get(), self.id)
+            mutex.release()
+            print('This is thread ' + str(self.id))
+            exe.get_title(self.controller)
+'''
             try:
                 print('This is thread ' + str(self.id))
-                exe.get_title()
+                exe.get_title(self.controller)
             except Exception as e:
                 print('Unexpectable thread stop!')
                 print(e)
                 continue
-
-
-class ThreadState(threading.Thread):
-
-    stop = False
-
-    def __inti__(self):
-        threading.Thread.__init__(self)
-
-    def run(self):
-        conn = pymysql.connect(host=host, user=user, password=passwd, db=db, charset='UTF8')
-        cursor = conn.cursor()
-        thread_amount = len(threads) - 1
-        while True:
-            cursor.execute("SELECT val from state where id = 0;")
-            result = cursor.fetchone()[0]
-
-            if result == 0:
-                self.stop = False
-            else:
-                self.stop = True
-            time.sleep(1)
-            conn.commit()
-
-# First send all tieba names which will construct url into queue
-threads = []
-name_queue = Queue()
-for t_name in tieba_names:
-    name_queue.put(t_name)
-
-
-# Then open (n+1) threads, 1 for opration like pause and add, n for crawl
-s = ThreadState()
-
-s.setDaemon(True)
-threads.append(s)
-s.start()
-time.sleep(1)
-
-conn = pymysql.connect(host=host, user=user, password=passwd, db=db, charset='UTF8')
-cursor = conn.cursor()
-
-for thread_num in range(thread_limit):
-    cursor.execute("insert into state (id, name, val) values ({num}, 'no_state', 0);".format(num=thread_num+2))
-    conn.commit()
-    t = ThreadCrawl(thread_num)
-    threads.append(t)
-    t.start()
-    time.sleep(0.3)
-
-cursor.close()
-conn.close()
-
-for i in range(thread_limit + 1):
-    threads[i].join()
+                '''
 
